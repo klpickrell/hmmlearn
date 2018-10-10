@@ -1,14 +1,15 @@
 # Dask Hidden Markov Models
 
 """
-The :mod:`hmmlearn.hmm` module implements hidden Markov models.
+The :mod:`hmmlearn.dask_hmm` module implements hidden Markov models with Dask support.
 """
 
 import numpy as np
 from scipy.misc import logsumexp
 from sklearn import cluster
 from sklearn.mixture import _validate_covars
-from sklearn.utils import check_random_state
+from sklearn.utils import check_array, check_random_state
+from sklearn.utils.validation import check_is_fitted
 
 from .stats import log_multivariate_normal_density
 from .base import _BaseHMM, ConvergenceMonitor
@@ -17,6 +18,7 @@ from .utils import iter_from_X_lengths, normalize, fill_covars, distribute_covar
 __all__ = ["DaskMultinomialHMM"]
 
 COVARIANCE_TYPES = frozenset(("spherical", "diag", "full", "tied"))
+DECODER_ALGORITHMS = frozenset(("viterbi", "map"))
 
 class DaskMultinomialHMM(_BaseHMM):
     """Hidden Markov Model with multinomial (discrete) emissions (Dask)
@@ -319,17 +321,29 @@ class DaskMultinomialHMM(_BaseHMM):
         check_is_fitted(self, "startprob_")
         self._check()
 
-        X = check_array(X)
-        n_samples = X.shape[0]
-        logprob = 0
-        posteriors = np.zeros((n_samples, self.n_components))
-        for i, j in iter_from_X_lengths(X, lengths):
-            framelogprob = self._compute_log_likelihood(X[i:j])
-            logprobij, fwdlattice = self._do_forward_pass(framelogprob)
-            logprob += logprobij
+#        posteriors[i:j] = self._compute_posteriors(fwdlattice, bwdlattice)
 
-            bwdlattice = self._do_backward_pass(framelogprob)
-            posteriors[i:j] = self._compute_posteriors(fwdlattice, bwdlattice)
+        def process(X):
+#            X = check_array(X)
+            n_samples = X.shape[0]
+            posteriors = np.zeros((n_samples, self.n_components))
+            result = { 'logprob' : 0, 'posteriors' : [] }
+            for idx,symbols in X.iterrows():
+                j = symbols.values[0]
+                framelogprob = self._compute_log_likelihood(j)
+                logprob, fwdlattice = self._do_forward_pass(framelogprob)
+                result['logprob'] += logprob
+                bwdlattice = self._do_backward_pass(framelogprob)
+                posteriors = self._compute_posteriors(fwdlattice, bwdlattice)
+                result['posteriors'].append(posteriors)
+            return result
+
+        result = X.map_partitions(process, meta={'logprob':'f8','posteriors':object})
+        result = result.compute()
+        logprob = 0
+        for r in result:
+            logprob += r['logprob']
+        posteriors = np.concatenate(result['posteriors'])
         return logprob, posteriors
 
     def score(self, X):
@@ -354,13 +368,22 @@ class DaskMultinomialHMM(_BaseHMM):
         check_is_fitted(self, "startprob_")
         self._check()
 
-        X = check_array(X)
-        # XXX we can unroll forward pass for speed and memory efficiency.
+        def process(X):
+#            X = check_array(X)
+            n_samples = X.shape[0]
+            result = { 'logprob' : 0 }
+            for idx,symbols in X.iterrows():
+                j = symbols.values[0]
+                framelogprob = self._compute_log_likelihood(j)
+                logprob, _fwdlattice = self._do_forward_pass(framelogprob)
+                result['logprob'] += logprob
+            return result
+
+        result = X.map_partitions(process, meta={'logprob':'f8'})
+        result = result.compute()
         logprob = 0
-        for i, j in iter_from_X_lengths(X, lengths):
-            framelogprob = self._compute_log_likelihood(X[i:j])
-            logprobij, _fwdlattice = self._do_forward_pass(framelogprob)
-            logprob += logprobij
+        for r in result:
+            logprob += r['logprob']
         return logprob
 
     def _decode_viterbi(self, X):
@@ -412,17 +435,28 @@ class DaskMultinomialHMM(_BaseHMM):
             "map": self._decode_map
         }[algorithm]
 
-        X = check_array(X)
-        n_samples = X.shape[0]
-        logprob = 0
-        state_sequence = np.empty(n_samples, dtype=int)
-        for i, j in iter_from_X_lengths(X, lengths):
-            # XXX decoder works on a single sample at a time!
-            logprobij, state_sequenceij = decoder(X[i:j])
-            logprob += logprobij
-            state_sequence[i:j] = state_sequenceij
+        def process(X):
+#        X = check_array(X)
+            n_samples = X.shape[0]
+            result = {'logprob' : 0, 'states' : [] }
+            for idx,symbols in X.iterrows():
+                j = symbols.values[0]
+                logprob, states = decoder(j)
+                result['logprob'] += logprob
+                result['states'].append(states)
+            return result
 
-        return logprob, state_sequence
+        result = X.map_partitions(process,meta={'logprob':'f8','states':object})
+        result = result.compute()
+
+        states = []
+        logprob = 0
+        for r in result:
+            logprob += r['logprob']
+            states.append(r['states'])
+
+        return logprob,np.concatenate(states)
+
 
     def predict(self, X):
         """Find most likely state sequence corresponding to ``X``.

@@ -446,8 +446,11 @@ class DaskMultinomialHMM(_BaseHMM):
                 result['states'].append(states)
             return result
 
-        result = X.map_partitions(process,meta={'logprob':'f8','states':object})
-        result = result.compute()
+        if 'map_partitions' in X:
+            result = X.map_partitions(process,meta={'logprob':'f8','states':object})
+            result = result.compute()
+        else:
+            result = X.apply(process)
 
         states = []
         logprob = 0
@@ -466,10 +469,6 @@ class DaskMultinomialHMM(_BaseHMM):
         X : array-like, shape (n_samples, n_features)
             Feature matrix of individual samples.
 
-        lengths : array-like of integers, shape (n_sequences, ), optional
-            Lengths of the individual sequences in ``X``. The sum of
-            these should be ``n_samples``.
-
         Returns
         -------
         state_sequence : array, shape (n_samples, )
@@ -483,10 +482,6 @@ class DaskMultinomialHMM(_BaseHMM):
 
         X : array-like, shape (n_samples, n_features)
             Feature matrix of individual samples.
-
-        lengths : array-like of integers, shape (n_sequences, ), optional
-            Lengths of the individual sequences in ``X``. The sum of
-            these should be ``n_samples``.
 
         Returns
         -------

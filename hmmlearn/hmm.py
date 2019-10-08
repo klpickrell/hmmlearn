@@ -11,19 +11,17 @@ The :mod:`hmmlearn.hmm` module implements hidden Markov models.
 """
 
 import numpy as np
-from scipy.misc import logsumexp
+from scipy.special import logsumexp
 from sklearn import cluster
-from sklearn.mixture import _validate_covars
 from sklearn.utils import check_random_state
 
 from .stats import log_multivariate_normal_density
 from .base import _BaseHMM
-from .utils import iter_from_X_lengths, normalize, fill_covars, distribute_covar_matrix_to_match_covariance_type
+from .utils import iter_from_X_lengths, normalize, fill_covars, distribute_covar_matrix_to_match_covariance_type, _validate_covars
 
 __all__ = ["GMMHMM", "GaussianHMM", "MultinomialHMM"]
 
 COVARIANCE_TYPES = frozenset(("spherical", "diag", "full", "tied"))
-
 
 class GaussianHMM(_BaseHMM):
     """Hidden Markov Model with Gaussian emissions.

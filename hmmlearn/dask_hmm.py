@@ -445,7 +445,7 @@ class DaskMultinomialHMM(_BaseHMM):
                 result['states'].append(states)
             return result
 
-        if 'map_partitions' in X:
+        if hasattr(X, 'map_partitions'):
             result = X.map_partitions(process,meta={'logprob':'f8','states':object})
             result = result.compute()
         else:
